@@ -1,115 +1,135 @@
-console.clear();
-require("dotenv").config();
 const {
-  Client,
   AccountId,
+  PrivateKey,
+  Client,
+  Hbar,
   TokenCreateTransaction,
   TokenType,
   TokenSupplyType,
-  TokenInfoQuery,
-  AccountBalanceQuery,
-  PrivateKey,
   TokenMintTransaction,
+  TransferTransaction,
+  AccountBalanceQuery,
+  TokenAssociateTransaction,
   AccountCreateTransaction,
-  Hbar,
-  TokenBurnTransaction,
 } = require("@hashgraph/sdk");
+
 require("dotenv").config();
-const adminId = AccountId.fromString(process.env.MY_ACCOUNT_ID);
-const adminKey = PrivateKey.fromString(process.env.MY_PRIVATE_KEY);
 
+// Configure accounts and client, and generate needed keys
+const operatorId = AccountId.fromString(process.env.MY_ACCOUNT_ID);
+const operatorKey = PrivateKey.fromString(process.env.MY_PRIVATE_KEY);
+const treasuryId = AccountId.fromString(process.env.MY_ACCOUNT_ID);
+const treasuryKey = PrivateKey.fromString(process.env.MY_PRIVATE_KEY);
 
-// Build Hedera testnet and mirror node client
-const client = Client.forTestnet();
+// Generate a new account key pair
+const newAccountPrivateKey = PrivateKey.generateED25519();
+const newAccountPublicKey = newAccountPrivateKey.publicKey;
 
-// Set the operator account ID and operator private key
-client.setOperator(adminId, adminKey);
+// Configure client with operator account details
+const client = Client.forTestnet().setOperator(operatorId, operatorKey);
 
-async function addAccount(){
+// Generate a new key pair for supply key
+const supplyPrivateKey = PrivateKey.generate();
 
-      //Create the transaction
-      const transaction = new AccountCreateTransaction()
-          .setKey(PrivateKey.publicKey)
-          .setInitialBalance(new Hbar(1000));
-      
-      //Sign the transaction with the client operator private key and submit to a Hedera network
-      const txResponse = await transaction.execute(client);
-      
-      //Request the receipt of the transaction
-      const receipt = await txResponse.getReceipt(client);
-      
-      //Get the account ID
-      const newAccountId = receipt.accountId;
-      
-      console.log("The new account ID is " +newAccountId);
-}
-addAccount()
+async function createFirstNFT() {
+  // Create a new account to hold the NFT
+  const newAccount = await new AccountCreateTransaction()
+    .setKey(newAccountPublicKey)
+    .setInitialBalance(Hbar.fromTinybars(1000))
+    .execute(client);
 
-async function createNFT() {
-  console.log("CreateNFT---------------------");
-  let tokenCreateTx = await new TokenCreateTransaction()
-    .setTokenName("MyNFT")
-    .setTokenSymbol("MNFT")
+  // Get the account ID from the transaction receipt
+  const accountId = (await newAccount.getReceipt(client)).accountId;
+
+  console.log("The new account ID is:", accountId);
+
+  // Create a new NFT token
+  const nftCreateTx = await new TokenCreateTransaction()
+    .setTokenName("SoufToken")
+    .setTokenSymbol("STK")
     .setTokenType(TokenType.NonFungibleUnique)
+    .setDecimals(0)
     .setInitialSupply(0)
-    .setTreasuryAccountId(myAccountId)
-    .setSupplyType(TokenSupplyType.Infinite)
-    .setSupplyKey(myPrivateKey)
-    .setFreezeKey(myPrivateKey)
-    .setPauseKey(myPrivateKey)
-    .setAdminKey(myPrivateKey)
-    .setWipeKey(myPrivateKey)
-    //.setKycKey(myPrivateKey)
+    .setTreasuryAccountId(treasuryId)
+    .setSupplyType(TokenSupplyType.Finite)
+    .setMaxSupply(300)
+    .setSupplyKey(supplyPrivateKey)
     .freezeWith(client);
 
-  let tokenCreateSign = await tokenCreateTx.sign(myPrivateKey);
-  let tokenCreateSubmit = await tokenCreateSign.execute(client);
-  let tokenCreateRx = await tokenCreateSubmit.getReceipt(client);
-  let tokenId = tokenCreateRx.tokenId;
-  console.log(`- Created token with ID: ${tokenId}`);
-  console.log("-----------------------------------");
-  return tokenId;
-}
+  // Sign the transaction with the treasury key
+  const nftCreateTxSigned = await nftCreateTx.sign(treasuryKey);
 
-async function queryTokenInfo(tokenId) {
-  console.log("QueryTokenInfo---------------------");
-  const query = new TokenInfoQuery().setTokenId(tokenId);
-  const tokenInfo = await query.execute(client);
-  console.log(JSON.stringify(tokenInfo, null, 4));
-  console.log("-----------------------------------");
-}
+  // Submit the transaction to Hedera network and get the receipt
+  const nftCreateTxReceipt = await nftCreateTxSigned.execute(client).getReceipt(client);
 
-async function queryAccountBalance(accountId) {
-  console.log("QueryAccountBalance----------------");
-  const balanceQuery = new AccountBalanceQuery().setAccountId(accountId);
-  const accountBalance = await balanceQuery.execute(client);
-  console.log(JSON.stringify(accountBalance, null, 4));
-  console.log("-----------------------------------");
-}
+  // Get the token ID from the receipt
+  const tokenId = nftCreateTxReceipt.tokenId;
 
-async function mintNFT(tokenId) {
-  console.log("MintNFT--------------------------");
+  console.log(`Created NFT with Token ID: ${tokenId}`);
 
-  // Mint new NFT
-  let mintTx = await new TokenMintTransaction()
+  // Mint a new NFT
+  const nftMintTx = await new TokenMintTransaction()
     .setTokenId(tokenId)
-    .setMetadata([
-      Buffer.from("ipfs://QmTzWcVfk88JRqjTpVwHzBeULRTNzHY7mnBSG42CpwHmPa"),
-      Buffer.from("secondToken"),
-    ])
+    .addNftMetadata({
+      key: "title",
+      value: "My First NFT",
+    })
+    .setSupplyKey(supplyPrivateKey)
+    .freezeWith(client);
+
+  // Sign the transaction with the treasury key
+  const nftMintTxSigned = await nftMintTx.sign(treasuryKey);
+
+  // Submit the transaction to Hedera network and get the receipt
+  const mintReceipt = await nftMintTxSigned.execute(client).getReceipt(client);
+
+  console.log(`Minted new NFT with serial: ${mintReceipt.serials[0]}`);
+
+  // Transfer the NFT to Bob's account
+  const bobPrivateKey = PrivateKey.generate();
+  const bobPublicKey = bobPrivateKey.publicKey;
+
+  const bobAccount = await new AccountCreateTransaction()
+    .setKey(bobPublicKey)
+    .setInitialBalance(Hbar.fromTinybars(0))
     .execute(client);
-  let mintRx = await mintTx.getReceipt(client);
-  //Log the serial number
-  console.log(`- Created NFT ${tokenId} with serial: ${mintRx.serials} \n`);
+  const bobReceipt = await bobAccount.getReceipt(client);
+// Get Bob's account ID from the receipt
+const bobAccountId = bobReceipt.accountId;
 
-  console.log("-----------------------------------");
+// Associate Bob's account with the token
+const tokenAssociateTx = await new TokenAssociateTransaction()
+.setAccountId(bobAccountId)
+.setTokenIds([tokenId])
+.freezeWith(client);
+
+// Sign the transaction with the treasury key
+const tokenAssociateTxSigned = await tokenAssociateTx.sign(treasuryKey);
+
+// Submit the transaction to Hedera network and get the receipt
+await tokenAssociateTxSigned.execute(client).getReceipt(client);
+
+console.log(Associated NFT with Token ID: ${tokenId} to account ID: ${bobAccountId});
+
+// Transfer the NFT to Bob's account
+const transferTx = await new TransferTransaction()
+.addNftTransfer(tokenId, accountId, bobAccountId, mintReceipt.serials[0])
+.freezeWith(client);
+
+// Sign the transaction with the new account and treasury keys
+const transferTxSigned = await transferTx.sign(newAccountPrivateKey, treasuryKey);
+
+// Submit the transaction to Hedera network and get the receipt
+await transferTxSigned.execute(client).getReceipt(client);
+
+console.log(Transferred NFT with Token ID: ${tokenId} from account ID: ${accountId} to account ID: ${bobAccountId});
+
+// Check the account balances
+const accountBalances = await new AccountBalanceQuery()
+.setAccountId(bobAccountId)
+.execute(client);
+
+console.log(Bob's account balance is: ${accountBalances.tokens.get(tokenId)});
 }
 
-async function main() {
-  const tokenId = await createNFT();
-  await queryTokenInfo(tokenId);
-  await queryAccountBalance(myAccountId);
-  await mintNFT(tokenId);
-  await queryAccountBalance(myAccountId);
-}
-main();
+createFirstNFT();
